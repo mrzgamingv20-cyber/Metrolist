@@ -8,7 +8,25 @@ if (localPropertiesFile.exists()) {
 }
 
 val baseApplicationId = "com.metrolist.music"
-val applicationIdOverride = System.getenv("METROLIST_APPLICATION_ID")?.takeIf { it.isNotBlank() }
+
+// ColorOS/OxygenOS/realme UI render their Dynamic Island (Aqua Dynamics / Live
+// Capsule) only for media sessions whose package sits on an OEM allowlist, which
+// is why Metrolist never appears there while Spotify does. Editing that list
+// needs root, so the root-free opt-in is to ship under an allowlisted id. Kept as
+// an explicit knob rather than reusing METROLIST_APPLICATION_ID so intent stays
+// readable at the call site.
+val dynamicIslandPackage =
+    (
+        providers.gradleProperty("dynamicIslandPackage").orNull
+            ?: System.getenv("METROLIST_DYNAMIC_ISLAND_PACKAGE")
+    )?.trim()?.takeIf { it.isNotBlank() }
+
+require(dynamicIslandPackage == null || dynamicIslandPackage.matches(Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+"))) {
+    "'$dynamicIslandPackage' is not a valid Android application id"
+}
+
+val applicationIdOverride =
+    System.getenv("METROLIST_APPLICATION_ID")?.takeIf { it.isNotBlank() } ?: dynamicIslandPackage
 val appNameOverride = System.getenv("METROLIST_APP_NAME")?.takeIf { it.isNotBlank() }
 val buildCommit =
     System.getenv("METROLIST_BUILD_COMMIT")
