@@ -994,4 +994,14 @@
     <string name="stream_source_web_creator_desc">Creator web client.</string>
     <string name="top_result">Top result</string>
     <string name="other">Other</string>
+    <string name="dynamic_island">Dynamic Island</string>
+    <string name="dynamic_island_subtitle">Island subtitle</string>
+    <string name="dynamic_island_subtitle_artist">Artist</string>
+    <string name="dynamic_island_subtitle_album">Album</string>
+    <string name="dynamic_island_subtitle_artist_album">Artist and album</string>
+    <string name="dynamic_island_subtitle_duration">Song duration</string>
+    <string name="dynamic_island_subtitle_none">Nothing</string>
+    <string name="dynamic_island_artwork">Island artwork</string>
+    <string name="dynamic_island_artwork_album">Album art</string>
+    <string name="dynamic_island_artwork_card">Now playing card</string>
 </resources>

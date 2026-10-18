@@ -41,6 +41,9 @@ import androidx.core.content.getSystemService
 import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import com.metrolist.music.constants.DynamicIslandArtwork
+import com.metrolist.music.constants.DynamicIslandSettings
+import com.metrolist.music.utils.NowPlayingCard
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -226,6 +229,7 @@ import kotlin.coroutines.coroutineContext
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
@@ -607,6 +611,7 @@ class MusicService :
         super.onCreate()
         isRunning = true
         shutdownDeferred = kotlinx.coroutines.CompletableDeferred<Unit>()
+        startDynamicIslandArtworkUpdates()
 
         setListener(
             object : MediaSessionService.Listener {
@@ -4731,6 +4736,37 @@ class MusicService :
     }
 
     private var widgetUpdateJob: Job? = null
+
+    /**
+     * Swaps the artwork of the playing item for a generated now playing card so the OEM dynamic
+     * island renders a designed card instead of a bare thumbnail. Only the current item is
+     * touched; queued items keep their album art, and the in app player resolves the thumbnail
+     * from the metadata tag rather than the media session artwork.
+     */
+    private fun startDynamicIslandArtworkUpdates() {
+        scope.launch {
+            currentMediaMetadata.collectLatest { metadata ->
+                if (DynamicIslandSettings.artwork != DynamicIslandArtwork.NOW_PLAYING_CARD) return@collectLatest
+                val cardUri = metadata?.let { NowPlayingCard.uriFor(this@MusicService, it) } ?: return@collectLatest
+                withContext(Dispatchers.Main) {
+                    val index = player.currentMediaItemIndex
+                    if (index == C.INDEX_UNSET || index >= player.mediaItemCount) return@withContext
+                    val item = player.getMediaItemAt(index)
+                    if (item.mediaMetadata.artworkUri == cardUri) return@withContext
+                    player.replaceMediaItem(
+                        index,
+                        item.buildUpon()
+                            .setMediaMetadata(
+                                item.mediaMetadata.buildUpon()
+                                    .setArtworkUri(cardUri)
+                                    .build(),
+                            )
+                            .build(),
+                    )
+                }
+            }
+        }
+    }
 
     private fun startWidgetUpdates() {
         widgetUpdateJob?.cancel()

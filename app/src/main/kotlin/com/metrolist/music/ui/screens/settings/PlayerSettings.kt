@@ -23,11 +23,13 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -50,6 +52,11 @@ import com.metrolist.music.constants.AutoRadioQueueKey
 import com.metrolist.music.constants.AutoSkipNextOnErrorKey
 import com.metrolist.music.constants.AutoplayKey
 import com.metrolist.music.constants.DisableLoadMoreWhenRepeatAllKey
+import com.metrolist.music.constants.DynamicIslandArtwork
+import com.metrolist.music.constants.DynamicIslandArtworkKey
+import com.metrolist.music.constants.DynamicIslandSettings
+import com.metrolist.music.constants.DynamicIslandSubtitle
+import com.metrolist.music.constants.DynamicIslandSubtitleKey
 import com.metrolist.music.constants.EnableGoogleCastKey
 import com.metrolist.music.constants.HistoryDuration
 import com.metrolist.music.constants.KeepScreenOn
@@ -74,6 +81,8 @@ import com.metrolist.music.ui.component.IconButton
 import com.metrolist.music.ui.component.Material3SettingsGroup
 import com.metrolist.music.ui.component.Material3SettingsItem
 import com.metrolist.music.ui.utils.backToMain
+import com.metrolist.music.ui.utils.getDynamicIslandArtworkLabel
+import com.metrolist.music.ui.utils.getDynamicIslandSubtitleLabel
 import com.metrolist.music.utils.rememberEnumPreference
 import com.metrolist.music.utils.rememberPreference
 import kotlin.math.roundToInt
@@ -95,6 +104,7 @@ import com.metrolist.music.ui.utils.getLoudnessLevelLabel
 fun PlayerSettings(
     navController: NavController
 ) {
+    val context = LocalContext.current
     val (audioQuality, onAudioQualityChange) = rememberEnumPreference(
         AudioQualityKey,
         defaultValue = AudioQuality.AUTO
@@ -229,6 +239,50 @@ fun PlayerSettings(
 
     var showLoudnessLevelDialog by remember {
         mutableStateOf(false)
+    }
+
+    val (islandSubtitle, onIslandSubtitleChange) = rememberEnumPreference(
+        DynamicIslandSubtitleKey,
+        defaultValue = DynamicIslandSubtitle.ARTIST,
+    )
+    val (islandArtwork, onIslandArtworkChange) = rememberEnumPreference(
+        DynamicIslandArtworkKey,
+        defaultValue = DynamicIslandArtwork.ALBUM_ART,
+    )
+    var showDynamicIslandSubtitleDialog by remember { mutableStateOf(false) }
+    var showDynamicIslandArtworkDialog by remember { mutableStateOf(false) }
+
+    // Media items are built from cached values, so keep them in sync with the edit.
+    LaunchedEffect(islandSubtitle, islandArtwork) {
+        DynamicIslandSettings.refresh(context)
+    }
+
+    if (showDynamicIslandSubtitleDialog) {
+        EnumDialog(
+            onDismiss = { showDynamicIslandSubtitleDialog = false },
+            onSelect = {
+                onIslandSubtitleChange(it)
+                showDynamicIslandSubtitleDialog = false
+            },
+            title = stringResource(R.string.dynamic_island_subtitle),
+            current = islandSubtitle,
+            values = DynamicIslandSubtitle.values().toList(),
+            valueText = { getDynamicIslandSubtitleLabel(it) },
+        )
+    }
+
+    if (showDynamicIslandArtworkDialog) {
+        EnumDialog(
+            onDismiss = { showDynamicIslandArtworkDialog = false },
+            onSelect = {
+                onIslandArtworkChange(it)
+                showDynamicIslandArtworkDialog = false
+            },
+            title = stringResource(R.string.dynamic_island_artwork),
+            current = islandArtwork,
+            values = DynamicIslandArtwork.values().toList(),
+            valueText = { getDynamicIslandArtworkLabel(it) },
+        )
     }
 
     if (showAudioQualityDialog) {
@@ -998,6 +1052,26 @@ fun PlayerSettings(
                     },
                     onClick = { onAutoSkipNextOnErrorChange(!autoSkipNextOnError) }
                 )
+            )
+        )
+
+        Spacer(modifier = Modifier.height(27.dp))
+
+        Material3SettingsGroup(
+            title = stringResource(R.string.dynamic_island),
+            items = listOf(
+                Material3SettingsItem(
+                    icon = painterResource(R.drawable.queue_music),
+                    title = { Text(stringResource(R.string.dynamic_island_subtitle)) },
+                    description = { Text(getDynamicIslandSubtitleLabel(islandSubtitle)) },
+                    onClick = { showDynamicIslandSubtitleDialog = true }
+                ),
+                Material3SettingsItem(
+                    icon = painterResource(R.drawable.album),
+                    title = { Text(stringResource(R.string.dynamic_island_artwork)) },
+                    description = { Text(getDynamicIslandArtworkLabel(islandArtwork)) },
+                    onClick = { showDynamicIslandArtworkDialog = true }
+                ),
             )
         )
 

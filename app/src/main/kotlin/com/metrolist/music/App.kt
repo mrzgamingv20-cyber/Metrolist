@@ -33,6 +33,7 @@ import com.metrolist.music.di.ApplicationScope
 import com.metrolist.music.extensions.toEnum
 import com.metrolist.music.extensions.toInetSocketAddress
 import com.metrolist.music.utils.CrashHandler
+import com.metrolist.music.constants.DynamicIslandSettings
 import com.metrolist.music.utils.ArtistNameAliases
 import com.metrolist.music.utils.InnerTubeXPlayer
 import com.metrolist.music.utils.dataStore
@@ -76,6 +77,7 @@ class App :
         // Install crash handler first
         CrashHandler.install(this)
         ArtistNameAliases.initialize(this)
+        DynamicIslandSettings.refresh(this)
 
         // preferencesDataStore uses filesDir/datastore; proactive mkdir reduces failures on odd ROM states
         try {
