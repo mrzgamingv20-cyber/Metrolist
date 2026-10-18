@@ -61,18 +61,31 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      - name: Restore persistent debug keystore
+        id: ks_cache
+        uses: actions/cache/restore@v6
+        with:
+          path: app/persistent-debug.keystore
+          key: dynamic-island-debug-keystore-v1
+
+      # The keystore has to survive across runs. Android refuses to update an
+      # installed package in place when the signature changes, so a throwaway key
+      # per run would force a full uninstall (and re-login) on every rebuild.
       - name: Detect signing secrets
         id: signing
         env:
           DEBUG_KEYSTORE: ${{ secrets.DEBUG_KEYSTORE }}
           KEYSTORE: ${{ secrets.KEYSTORE }}
+          KS_FROM_CACHE: ${{ steps.ks_cache.outputs.cache-hit }}
         run: |
           if [ -n "$DEBUG_KEYSTORE" ]; then
             printf '%s' "$DEBUG_KEYSTORE" | base64 -d > ./app/persistent-debug.keystore
             echo "debug_keystore=restored" >> "$GITHUB_OUTPUT"
+          elif [ "$KS_FROM_CACHE" = "true" ]; then
+            echo "debug_keystore=restored" >> "$GITHUB_OUTPUT"
           else
             # Decoding an empty secret leaves a zero byte keystore that exists
-            # but cannot sign, so mint a throwaway one for this run.
+            # but cannot sign, so mint a persistent one instead.
             keytool -genkeypair -v \
               -keystore ./app/persistent-debug.keystore \
               -storepass android \
@@ -90,6 +103,13 @@ jobs:
             echo "signed=false" >> "$GITHUB_OUTPUT"
             echo "::warning::No release signing secret configured, release builds stay unsigned."
           fi
+
+      - name: Save persistent debug keystore
+        if: steps.signing.outputs.debug_keystore == 'generated'
+        uses: actions/cache/save@v6
+        with:
+          path: app/persistent-debug.keystore
+          key: dynamic-island-debug-keystore-v1
 
       - name: Build APK
         env:
