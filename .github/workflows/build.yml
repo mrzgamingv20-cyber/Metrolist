@@ -27,7 +27,7 @@ jobs:
   build_release:
     name: Build Release (${{ matrix.variant }})
     if: github.actor != 'dependabot[bot]' && github.actor != 'renovate[bot]'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 15
 
     strategy:
@@ -71,6 +71,7 @@ jobs:
           LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
 
       - name: Sign APK
+        if: ${{ secrets.KEYSTORE != '' }}
         uses: ilharp/sign-android-release@v2.0.0
         with:
           releaseDir: app/build/outputs/apk/${{ matrix.variant }}/release/
@@ -89,7 +90,13 @@ jobs:
           else
             TARGET_NAME="app-universal-release.apk"
           fi
-          find "$OUTPUT_DIR" -name "*-signed.apk" -o -name "*-unsigned-signed.apk" | xargs -I{} mv {} "$OUTPUT_DIR/out/$TARGET_NAME"
+          SIGNED=$(find "$OUTPUT_DIR" -maxdepth 1 \( -name "*-signed.apk" -o -name "*-unsigned-signed.apk" \) | head -1)
+          if [ -n "$SIGNED" ]; then
+            mv "$SIGNED" "$OUTPUT_DIR/out/$TARGET_NAME"
+          else
+            cp "$(find "$OUTPUT_DIR" -maxdepth 1 -name '*.apk' | head -1)" "$OUTPUT_DIR/out/$TARGET_NAME"
+            echo "::warning::No signing secrets configured, artifact is unsigned and cannot be installed."
+          fi
 
       - name: Upload Signed APK
         uses: actions/upload-artifact@v7
@@ -100,7 +107,7 @@ jobs:
   build_debug:
     name: Build Debug (${{ matrix.variant }})
     if: github.actor != 'dependabot[bot]' && github.actor != 'renovate[bot]'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 15
 
     strategy:
@@ -133,8 +140,24 @@ jobs:
         run: chmod +x gradlew
 
       - name: Restore Persistent Keystore
+        if: ${{ secrets.DEBUG_KEYSTORE != '' }}
         run: |
           echo "${{ secrets.DEBUG_KEYSTORE }}" | base64 -d > ./app/persistent-debug.keystore
+
+      # A fork has no upstream signing secrets. Without this the empty keystore
+      # written above would exist but fail to sign, so mint a local one instead.
+      - name: Generate debug keystore
+        if: ${{ secrets.DEBUG_KEYSTORE == '' }}
+        run: |
+          keytool -genkeypair -v \
+            -keystore ./app/persistent-debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Metrolist Debug,O=Metrolist,C=US"
 
       # Lint is intentionally not run in CI: it never gated a merge and added
       # several minutes to every build. Run :app:lintGmsRelease locally.
@@ -157,7 +180,7 @@ jobs:
 
   publish_nightly:
     name: Publish Nightly Release
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && secrets.KEYSTORE != ''
     needs: [build_release, build_debug]
     runs-on: ubuntu-latest
     timeout-minutes: 5
