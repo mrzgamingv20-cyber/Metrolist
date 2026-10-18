@@ -247,7 +247,7 @@ object NowPlayingCard {
         val hash = seed.hashCode()
         val hue = ((hash % 360) + 360) % 360
         val top = Color.HSVToColor(floatArrayOf(hue.toFloat(), 0.55f, 0.45f))
-        val bottom = Color.HSVToColor(floatArrayOf((hue + 40) % 360, 0.65f, 0.22f))
+        val bottom = Color.HSVToColor(floatArrayOf(((hue + 40) % 360).toFloat(), 0.65f, 0.22f))
         return Paint().apply {
             shader = LinearGradient(
                 0f, 0f, SIZE.toFloat(), SIZE.toFloat(),
