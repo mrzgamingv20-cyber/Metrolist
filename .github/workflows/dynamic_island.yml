@@ -97,6 +97,12 @@ jobs:
           APP_NAME: ${{ github.event.inputs.appName || 'Metrolist' }}
           VARIANT: ${{ github.event.inputs.variant || 'foss' }}
           BUILD_TYPE: ${{ github.event.inputs.buildType || 'debug' }}
+          METROLIST_APP_NAME: ${{ github.event.inputs.appName || 'Metrolist' }}
+          METROLIST_BUILD_COMMIT: ${{ github.sha }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          PULL_REQUEST: "false"
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
         run: |
           set -euo pipefail
           if ! printf '%s' "$PKG" | grep -Eq '^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$'; then
@@ -114,7 +120,7 @@ jobs:
             *)       TASK="${TASK}Debug" ;;
           esac
           echo "Building $TASK as $PKG"
-          ./gradlew --console=plain "$TASK" --warning-mode summary
+          ./gradlew --console=plain "$TASK" -PdynamicIslandPackage="$PKG" --warning-mode summary
 
       - name: Sign release APK
         if: github.event.inputs.buildType == 'release' && steps.signing.outputs.signed == 'true'
@@ -126,6 +132,28 @@ jobs:
           keyStorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
           keyPassword: ${{ secrets.KEY_PASSWORD }}
           buildToolsVersion: 36.0.0
+
+      # A green build proves nothing about the application id, so assert the
+      # spoof actually landed before publishing the artifact.
+      - name: Verify application id
+        env:
+          PKG: ${{ github.event.inputs.package || 'com.spotify.music' }}
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          AAPT=$(find "$SDK/build-tools" -mindepth 2 -maxdepth 2 -name aapt2 2>/dev/null | sort -V | tail -1)
+          APK=$(find app/build/outputs/apk -name '*.apk' | head -1)
+          if [ -z "$AAPT" ] || [ -z "$APK" ]; then
+            echo "::warning::Could not locate aapt2 or the built APK, skipping verification."
+            exit 0
+          fi
+          ACTUAL=$("$AAPT" dump badging "$APK" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")
+          echo "Built application id: $ACTUAL"
+          if [ "$ACTUAL" != "$PKG" ]; then
+            echo "::error::Expected application id '$PKG' but the APK is '$ACTUAL'"
+            exit 1
+          fi
+          echo "Application id spoof verified."
 
       - name: Upload APK
         uses: actions/upload-artifact@v7
