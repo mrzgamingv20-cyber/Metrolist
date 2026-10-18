@@ -22,9 +22,9 @@ on:
         required: false
         default: foss
       buildType:
-        description: "Build type (release needs signing secrets to be installable)"
+        description: "Build type"
         required: false
-        default: debug
+        default: release
   push:
     branches: ["main"]
     paths:
@@ -142,16 +142,37 @@ jobs:
           echo "Building $TASK as $PKG"
           ./gradlew --console=plain "$TASK" -PdynamicIslandPackage="$PKG" --warning-mode summary
 
+      # Debug builds of this app are noticeably slower at runtime because R8 and the Compose
+      # production compiler do not run. Sign the release build with the same persistent keystore so
+      # it stays installable and updatable in place without needing upstream release secrets.
       - name: Sign release APK
-        if: github.event.inputs.buildType == 'release' && steps.signing.outputs.signed == 'true'
-        uses: ilharp/sign-android-release@v2.0.0
-        with:
-          releaseDir: app/build/outputs/apk/${{ github.event.inputs.variant || 'foss' }}/release/
-          signingKey: ${{ secrets.KEYSTORE }}
-          keyAlias: ${{ secrets.KEY_ALIAS }}
-          keyStorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
-          keyPassword: ${{ secrets.KEY_PASSWORD }}
-          buildToolsVersion: 36.0.0
+        if: github.event.inputs.buildType == 'release'
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          APKSIGNER=$(find "$SDK/build-tools" -mindepth 2 -maxdepth 2 -name apksigner 2>/dev/null | sort -V | tail -1)
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::apksigner not found under $SDK/build-tools"
+            exit 1
+          fi
+          VARIANT_DIR="app/build/outputs/apk/${{ github.event.inputs.variant || 'foss' }}/release"
+          UNSIGNED=$(find "$VARIANT_DIR" -maxdepth 1 -name '*.apk' ! -name '*-signed.apk' | head -1)
+          if [ -z "$UNSIGNED" ]; then
+            echo "::error::No unsigned release APK found in $VARIANT_DIR"
+            exit 1
+          fi
+          mkdir -p "$VARIANT_DIR/out"
+          "$APKSIGNER" sign \
+            --ks app/persistent-debug.keystore \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --ks-key-alias androiddebugkey \
+            --out "$VARIANT_DIR/out/app-signed.apk" \
+            "$UNSIGNED"
+          "$APKSIGNER" verify "$VARIANT_DIR/out/app-signed.apk"
+          # Drop the unsigned copy so the artifact only ever contains the installable APK.
+          rm -f "$UNSIGNED"
+          echo "Signed release APK is ready."
 
       # A green build proves nothing about the application id, so assert the
       # spoof actually landed before publishing the artifact.
@@ -162,7 +183,8 @@ jobs:
           set -euo pipefail
           SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
           AAPT=$(find "$SDK/build-tools" -mindepth 2 -maxdepth 2 -name aapt2 2>/dev/null | sort -V | tail -1)
-          APK=$(find app/build/outputs/apk -name '*.apk' | head -1)
+          APK=$(find app/build/outputs/apk -name '*.apk' -path '*/out/*' | head -1)
+          [ -n "$APK" ] || APK=$(find app/build/outputs/apk -name '*.apk' | head -1)
           if [ -z "$AAPT" ] || [ -z "$APK" ]; then
             echo "::warning::Could not locate aapt2 or the built APK, skipping verification."
             exit 0
