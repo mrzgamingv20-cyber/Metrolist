@@ -30,6 +30,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    # `secrets` is not an allowed context inside a job or step `if`, so the
+    # release keystore check is resolved to a boolean in a step and handed to the
+    # publishing job as an output instead.
+    outputs:
+      signed: ${{ steps.signing.outputs.signed }}
+
     strategy:
       matrix:
         include:
@@ -59,6 +65,18 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      - name: Detect release signing secrets
+        id: signing
+        env:
+          KEYSTORE: ${{ secrets.KEYSTORE }}
+        run: |
+          if [ -n "$KEYSTORE" ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No release signing secret configured, artifacts stay unsigned."
+          fi
+
       - name: Build Release APK
         run: ./gradlew --console=plain assemble${{ matrix.variantName }}Release --warning-mode summary
         env:
@@ -71,7 +89,7 @@ jobs:
           LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
 
       - name: Sign APK
-        if: ${{ secrets.KEYSTORE != '' }}
+        if: steps.signing.outputs.signed == 'true'
         uses: ilharp/sign-android-release@v2.0.0
         with:
           releaseDir: app/build/outputs/apk/${{ matrix.variant }}/release/
@@ -139,25 +157,26 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Restore Persistent Keystore
-        if: ${{ secrets.DEBUG_KEYSTORE != '' }}
+      - name: Prepare Persistent Keystore
+        env:
+          DEBUG_KEYSTORE: ${{ secrets.DEBUG_KEYSTORE }}
         run: |
-          echo "${{ secrets.DEBUG_KEYSTORE }}" | base64 -d > ./app/persistent-debug.keystore
-
-      # A fork has no upstream signing secrets. Without this the empty keystore
-      # written above would exist but fail to sign, so mint a local one instead.
-      - name: Generate debug keystore
-        if: ${{ secrets.DEBUG_KEYSTORE == '' }}
-        run: |
-          keytool -genkeypair -v \
-            -keystore ./app/persistent-debug.keystore \
-            -storepass android \
-            -alias androiddebugkey \
-            -keypass android \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=Metrolist Debug,O=Metrolist,C=US"
+          if [ -n "$DEBUG_KEYSTORE" ]; then
+            printf '%s' "$DEBUG_KEYSTORE" | base64 -d > ./app/persistent-debug.keystore
+          else
+            # A fork has no upstream signing secrets. Decoding an empty secret
+            # would leave a zero byte keystore that exists but cannot sign, so
+            # mint a throwaway one instead.
+            keytool -genkeypair -v \
+              -keystore ./app/persistent-debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Metrolist Debug,O=Metrolist,C=US"
+          fi
 
       # Lint is intentionally not run in CI: it never gated a merge and added
       # several minutes to every build. Run :app:lintGmsRelease locally.
@@ -180,7 +199,7 @@ jobs:
 
   publish_nightly:
     name: Publish Nightly Release
-    if: github.event_name == 'push' && secrets.KEYSTORE != ''
+    if: github.event_name == 'push' && needs.build_release.outputs.signed == 'true'
     needs: [build_release, build_debug]
     runs-on: ubuntu-latest
     timeout-minutes: 5

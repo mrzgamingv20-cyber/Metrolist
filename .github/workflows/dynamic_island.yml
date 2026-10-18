@@ -61,22 +61,35 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Build debug keystore
-        if: ${{ secrets.DEBUG_KEYSTORE != '' }}
-        run: echo "${{ secrets.DEBUG_KEYSTORE }}" | base64 -d > ./app/persistent-debug.keystore
-
-      - name: Generate debug keystore
-        if: ${{ secrets.DEBUG_KEYSTORE == '' }}
+      - name: Detect signing secrets
+        id: signing
+        env:
+          DEBUG_KEYSTORE: ${{ secrets.DEBUG_KEYSTORE }}
+          KEYSTORE: ${{ secrets.KEYSTORE }}
         run: |
-          keytool -genkeypair -v \
-            -keystore ./app/persistent-debug.keystore \
-            -storepass android \
-            -alias androiddebugkey \
-            -keypass android \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=Metrolist Dynamic Island,O=Metrolist,C=US"
+          if [ -n "$DEBUG_KEYSTORE" ]; then
+            printf '%s' "$DEBUG_KEYSTORE" | base64 -d > ./app/persistent-debug.keystore
+            echo "debug_keystore=restored" >> "$GITHUB_OUTPUT"
+          else
+            # Decoding an empty secret leaves a zero byte keystore that exists
+            # but cannot sign, so mint a throwaway one for this run.
+            keytool -genkeypair -v \
+              -keystore ./app/persistent-debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Metrolist Dynamic Island,O=Metrolist,C=US"
+            echo "debug_keystore=generated" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "$KEYSTORE" ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No release signing secret configured, release builds stay unsigned."
+          fi
 
       - name: Build APK
         env:
@@ -104,7 +117,7 @@ jobs:
           ./gradlew --console=plain "$TASK" --warning-mode summary
 
       - name: Sign release APK
-        if: ${{ github.event.inputs.buildType == 'release' && secrets.KEYSTORE != '' }}
+        if: github.event.inputs.buildType == 'release' && steps.signing.outputs.signed == 'true'
         uses: ilharp/sign-android-release@v2.0.0
         with:
           releaseDir: app/build/outputs/apk/${{ github.event.inputs.variant || 'foss' }}/release/
