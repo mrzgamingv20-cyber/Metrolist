@@ -4747,23 +4747,22 @@ class MusicService :
         scope.launch {
             currentMediaMetadata.collectLatest { metadata ->
                 if (DynamicIslandSettings.artwork != DynamicIslandArtwork.NOW_PLAYING_CARD) return@collectLatest
+                // uriFor hops off the main thread itself; only the player mutation below is main.
                 val cardUri = metadata?.let { NowPlayingCard.uriFor(this@MusicService, it) } ?: return@collectLatest
-                withContext(Dispatchers.Main) {
-                    val index = player.currentMediaItemIndex
-                    if (index == C.INDEX_UNSET || index >= player.mediaItemCount) return@withContext
-                    val item = player.getMediaItemAt(index)
-                    if (item.mediaMetadata.artworkUri == cardUri) return@withContext
-                    player.replaceMediaItem(
-                        index,
-                        item.buildUpon()
-                            .setMediaMetadata(
-                                item.mediaMetadata.buildUpon()
-                                    .setArtworkUri(cardUri)
-                                    .build(),
-                            )
-                            .build(),
-                    )
-                }
+                val index = player.currentMediaItemIndex
+                if (index == C.INDEX_UNSET || index >= player.mediaItemCount) return@collectLatest
+                val item = player.getMediaItemAt(index)
+                if (item.mediaMetadata.artworkUri == cardUri) return@collectLatest
+                player.replaceMediaItem(
+                    index,
+                    item.buildUpon()
+                        .setMediaMetadata(
+                            item.mediaMetadata.buildUpon()
+                                .setArtworkUri(cardUri)
+                                .build(),
+                        )
+                        .build(),
+                )
             }
         }
     }

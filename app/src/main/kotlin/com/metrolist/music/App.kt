@@ -77,7 +77,8 @@ class App :
         // Install crash handler first
         CrashHandler.install(this)
         ArtistNameAliases.initialize(this)
-        DynamicIslandSettings.refresh(this)
+        // Suspending DataStore read; keep it off the main thread so startup is not stalled.
+        CoroutineScope(Dispatchers.IO).launch { DynamicIslandSettings.refresh(this@App) }
 
         // preferencesDataStore uses filesDir/datastore; proactive mkdir reduces failures on odd ROM states
         try {

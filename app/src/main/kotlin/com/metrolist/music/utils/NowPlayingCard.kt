@@ -22,6 +22,8 @@ import coil3.request.SuccessResult
 import coil3.request.allowHardware
 import coil3.toBitmap
 import com.metrolist.music.models.MediaMetadata
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.abs
@@ -35,8 +37,19 @@ import timber.log.Timber
  */
 object NowPlayingCard {
 
-    private const val SIZE = 640
+    private const val SIZE = 512
     private const val MAX_LINES = 3
+
+    // Avoids touching the disk for songs already rendered this session. collectLatest can restart
+    // a block while the previous render is still winding down, hence the lock.
+    private val cacheLock = Any()
+    private val memoryCache = object : LinkedHashMap<String, Uri>(32, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Uri>) = size > 64
+    }
+
+    private fun cached(key: String): Uri? = synchronized(cacheLock) { memoryCache[key] }
+
+    private fun remember(key: String, uri: Uri) = synchronized(cacheLock) { memoryCache[key] = uri }
 
     /**
      * Returns a cached uri for [metadata], generating and storing the card on first use. Returns
@@ -45,21 +58,34 @@ object NowPlayingCard {
     suspend fun uriFor(context: Context, metadata: MediaMetadata): Uri? {
         val subtitle = metadata.artists.joinToString(", ") { it.name }
         val title = metadata.title.takeIf { it.isNotBlank() } ?: return null
-        val cacheDir = File(context.cacheDir, "now_playing_cards").apply { mkdirs() }
-        val file = File(cacheDir, "${metadata.id.sanitized()}.jpg")
-        if (file.exists() && file.length() > 0) return Uri.fromFile(file)
+        val key = metadata.id
+        cached(key)?.let { return it }
 
-        return try {
-            val bitmap = render(context, title, subtitle, metadata.thumbnailUrl)
-            FileOutputStream(file).use { out ->
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+        // Rendering allocates a bitmap and compressing it hits the disk, so never let this run on
+        // the caller when that caller is the service main thread.
+        return withContext(Dispatchers.IO) {
+            val cacheDir = File(context.cacheDir, "now_playing_cards").apply { mkdirs() }
+            val file = File(cacheDir, "${metadata.id.sanitized()}.jpg")
+            if (file.exists() && file.length() > 0) {
+                val cached = Uri.fromFile(file)
+                remember(key, cached)
+                return@withContext cached
             }
-            bitmap.recycle()
-            Uri.fromFile(file)
-        } catch (e: Exception) {
-            Timber.tag("NowPlayingCard").w(e, "Failed to render now playing card")
-            file.delete()
-            null
+
+            try {
+                val bitmap = render(context, title, subtitle, metadata.thumbnailUrl)
+                FileOutputStream(file).use { out ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                }
+                bitmap.recycle()
+                val uri = Uri.fromFile(file)
+                remember(key, uri)
+                uri
+            } catch (e: Exception) {
+                Timber.tag("NowPlayingCard").w(e, "Failed to render now playing card")
+                file.delete()
+                null
+            }
         }
     }
 

@@ -9,7 +9,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.metrolist.music.extensions.toEnum
 import com.metrolist.music.utils.dataStore
-import com.metrolist.music.utils.get
+import kotlinx.coroutines.flow.first
 
 val DynamicIslandSubtitleKey = stringPreferencesKey("dynamicIslandSubtitle")
 val DynamicIslandArtworkKey = stringPreferencesKey("dynamicIslandArtwork")
@@ -40,9 +40,13 @@ object DynamicIslandSettings {
     @Volatile var artwork: DynamicIslandArtwork = DynamicIslandArtwork.ALBUM_ART
         private set
 
-    fun refresh(context: Context) {
-        val store = context.dataStore
-        subtitle = store.get(DynamicIslandSubtitleKey, DynamicIslandSubtitle.ARTIST.name).toEnum(DynamicIslandSubtitle.ARTIST)
-        artwork = store.get(DynamicIslandArtworkKey, DynamicIslandArtwork.ALBUM_ART.name).toEnum(DynamicIslandArtwork.ALBUM_ART)
+    /**
+     * Suspending on purpose: the synchronous DataStore accessor blocks its caller, which stalls
+     * app startup when it is read from onCreate.
+     */
+    suspend fun refresh(context: Context) {
+        val values = context.dataStore.data.first()
+        subtitle = values[DynamicIslandSubtitleKey].toEnum(DynamicIslandSubtitle.ARTIST)
+        artwork = values[DynamicIslandArtworkKey].toEnum(DynamicIslandArtwork.ALBUM_ART)
     }
 }
