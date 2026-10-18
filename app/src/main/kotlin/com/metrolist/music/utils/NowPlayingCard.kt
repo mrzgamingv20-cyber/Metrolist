@@ -13,6 +13,7 @@ import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.Shader
+import android.graphics.Typeface
 import android.net.Uri
 import android.text.TextPaint
 import androidx.core.graphics.createBitmap
@@ -38,7 +39,10 @@ import timber.log.Timber
 object NowPlayingCard {
 
     private const val SIZE = 512
-    private const val MAX_LINES = 3
+    private const val TITLE_LINES = 2
+    private const val SUBTITLE_LINES = 1
+    private const val BLUR_STEPS = 24
+    private const val AVERAGE_STEPS = 8
 
     // Avoids touching the disk for songs already rendered this session. collectLatest can restart
     // a block while the previous render is still winding down, hence the lock.
@@ -100,35 +104,63 @@ object NowPlayingCard {
 
         val art = artworkUrl?.let { loadArtwork(context, it) }
         if (art != null) {
-            // Not recycled: Coil may hand back an instance that is still shared with its cache.
-            canvas.drawBitmap(art, null, centerCrop(Rect(0, 0, SIZE, SIZE), art.width, art.height), Paint(Paint.ANTI_ALIAS_FLAG))
+            // Heavy blur behind the text is what makes these cards read as glass rather than as a
+            // plain album cover. Done by downscaling hard and filtering back up so it works below
+            // API 31 where RenderEffect is unavailable.
+            val backdrop = soften(art)
+            canvas.drawBitmap(backdrop, null, Rect(0, 0, SIZE, SIZE), Paint(Paint.FILTER_BITMAP_FLAG))
+            backdrop.recycle()
+            // Keeps a trace of the cover colour instead of flattening everything to black.
+            val tint = averageColor(art)
+            canvas.drawRect(0f, 0f, SIZE.toFloat(), SIZE.toFloat(), Paint().apply {
+                shader = LinearGradient(
+                    0f, 0f, SIZE.toFloat(), SIZE.toFloat(),
+                    intArrayOf(
+                        withAlpha(tint, 0),
+                        withAlpha(tint, 70),
+                        withAlpha(tint, 0),
+                    ),
+                    floatArrayOf(0f, 0.55f, 1f),
+                    Shader.TileMode.CLAMP,
+                )
+            })
+        } else {
+            canvas.drawRect(0f, 0f, SIZE.toFloat(), SIZE.toFloat(), fallbackGradient(title))
         }
-        // Scrim keeps the text readable over bright artwork and makes the card feel intentional.
+
+        // Scrim: gentle at the top so the artwork still reads, heavy at the bottom for the text.
         canvas.drawRect(0f, 0f, SIZE.toFloat(), SIZE.toFloat(), Paint().apply {
             shader = LinearGradient(
                 0f, 0f, 0f, SIZE.toFloat(),
                 intArrayOf(
-                    Color.argb(110, 0, 0, 0),
-                    Color.argb(150, 0, 0, 0),
-                    Color.argb(225, 0, 0, 0),
+                    Color.argb(70, 6, 8, 14),
+                    Color.argb(120, 6, 8, 14),
+                    Color.argb(215, 4, 6, 12),
                 ),
-                floatArrayOf(0f, 0.45f, 1f),
+                floatArrayOf(0f, 0.42f, 1f),
                 Shader.TileMode.CLAMP,
             )
         })
 
-        val margin = SIZE * 0.08f
+        val margin = SIZE * 0.09f
         val textWidth = SIZE - margin * 2
 
-        var titleSize = SIZE * 0.115f
-        var subtitleSize = SIZE * 0.075f
-        val titlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
-        val subtitlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(214, 255, 255, 255) }
+        var titleSize = SIZE * 0.125f
+        var subtitleSize = SIZE * 0.072f
+        val titlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            letterSpacing = 0.01f
+        }
+        val subtitlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(179, 255, 255, 255)
+            typeface = Typeface.create("sans-serif-regular", Typeface.NORMAL)
+        }
 
         // Shrink until the text fits the card so long titles never overflow.
-        while (titleSize > SIZE * 0.055f &&
-            (measureHeight(titlePaint, title, titleSize, textWidth) > SIZE * 0.5f ||
-                measureHeight(subtitlePaint, subtitle, subtitleSize, textWidth) > SIZE * 0.3f)
+        while (titleSize > SIZE * 0.06f &&
+            (measureHeight(titlePaint, title, titleSize, textWidth, TITLE_LINES) > SIZE * 0.36f ||
+                measureHeight(subtitlePaint, subtitle, subtitleSize, textWidth, SUBTITLE_LINES) > SIZE * 0.14f)
         ) {
             titleSize *= 0.94f
             subtitleSize *= 0.94f
@@ -138,13 +170,15 @@ object NowPlayingCard {
         titlePaint.textSize = titleSize
         subtitlePaint.textSize = subtitleSize
 
-        val titleHeight = measureHeight(titlePaint, title, titleSize, textWidth)
-        val subtitleHeight = if (subtitle.isBlank()) 0f else measureHeight(subtitlePaint, subtitle, subtitleSize, textWidth)
+        val gap = SIZE * 0.022f
+        val titleHeight = measureHeight(titlePaint, title, titleSize, textWidth, TITLE_LINES)
+        val subtitleHeight =
+            if (subtitle.isBlank()) 0f else measureHeight(subtitlePaint, subtitle, subtitleSize, textWidth, SUBTITLE_LINES)
 
         var y = SIZE - margin - subtitleHeight
-        drawTextBlock(canvas, subtitlePaint, subtitle, margin, y, textWidth, subtitleHeight)
-        y -= titleHeight
-        drawTextBlock(canvas, titlePaint, title, margin, y, textWidth, titleHeight)
+        drawTextBlock(canvas, subtitlePaint, subtitle, margin, y, textWidth, subtitleHeight, SUBTITLE_LINES)
+        y -= titleHeight + if (subtitleHeight > 0f) gap else 0f
+        drawTextBlock(canvas, titlePaint, title, margin, y, textWidth, titleHeight, TITLE_LINES)
 
         return card
     }
@@ -157,9 +191,10 @@ object NowPlayingCard {
         bottom: Float,
         maxWidth: Float,
         blockHeight: Float,
+        maxLines: Int,
     ) {
         if (text.isBlank()) return
-        val lines = wrapLines(paint, text, maxWidth)
+        val lines = wrapLines(paint, text, maxWidth, maxLines)
         val lineHeight = blockHeight / lines.size
         var baseline = bottom - paint.descent()
         for (line in lines) {
@@ -169,10 +204,65 @@ object NowPlayingCard {
     }
 
     /**
+     * Cheap box blur approximation: collapse to a handful of pixels, then let bilinear filtering
+     * stretch it back. Runs on any API level unlike RenderEffect, which needs API 31.
+     */
+    private fun soften(src: Bitmap): Bitmap {
+        val tiny = createBitmap(BLUR_STEPS, BLUR_STEPS)
+        Canvas(tiny).drawBitmap(
+            src,
+            null,
+            centerCrop(Rect(0, 0, BLUR_STEPS, BLUR_STEPS), src.width, src.height),
+            Paint(Paint.FILTER_BITMAP_FLAG),
+        )
+        val out = createBitmap(SIZE, SIZE)
+        Canvas(out).drawBitmap(tiny, null, Rect(0, 0, SIZE, SIZE), Paint(Paint.FILTER_BITMAP_FLAG))
+        tiny.recycle()
+        return out
+    }
+
+    private fun averageColor(src: Bitmap): Int {
+        val sample = createBitmap(AVERAGE_STEPS, AVERAGE_STEPS)
+        Canvas(sample).drawBitmap(src, null, Rect(0, 0, AVERAGE_STEPS, AVERAGE_STEPS), Paint(Paint.FILTER_BITMAP_FLAG))
+        val pixels = IntArray(AVERAGE_STEPS * AVERAGE_STEPS)
+        sample.getPixels(pixels, 0, AVERAGE_STEPS, 0, 0, AVERAGE_STEPS, AVERAGE_STEPS)
+        sample.recycle()
+        var r = 0L
+        var g = 0L
+        var b = 0L
+        for (pixel in pixels) {
+            r += (pixel shr 16) and 0xFF
+            g += (pixel shr 8) and 0xFF
+            b += pixel and 0xFF
+        }
+        val count = pixels.size
+        return Color.rgb((r / count).toInt(), (g / count).toInt(), (b / count).toInt())
+    }
+
+    private fun withAlpha(color: Int, alpha: Int) =
+        Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color))
+
+    /** Used when there is no cover to work with, keeps cards distinguishable per song. */
+    private fun fallbackGradient(seed: String): Paint {
+        val hash = seed.hashCode()
+        val hue = ((hash % 360) + 360) % 360
+        val top = Color.HSVToColor(floatArrayOf(hue.toFloat(), 0.55f, 0.45f))
+        val bottom = Color.HSVToColor(floatArrayOf((hue + 40) % 360, 0.65f, 0.22f))
+        return Paint().apply {
+            shader = LinearGradient(
+                0f, 0f, SIZE.toFloat(), SIZE.toFloat(),
+                intArrayOf(top, bottom),
+                null,
+                Shader.TileMode.CLAMP,
+            )
+        }
+    }
+
+    /**
      * Greedy word wrap with an ellipsis on the last kept line. Hand rolled because the platform
      * layout builders are awkward to reach from Kotlin and the older alternatives are deprecated.
      */
-    private fun wrapLines(paint: TextPaint, text: String, maxWidth: Float): List<String> {
+    private fun wrapLines(paint: TextPaint, text: String, maxWidth: Float, maxLines: Int): List<String> {
         val words = text.split(' ').filter { it.isNotEmpty() }
         val lines = mutableListOf<String>()
         val current = StringBuilder()
@@ -183,7 +273,7 @@ object NowPlayingCard {
             if (current.isEmpty() || paint.measureText(candidate) <= maxWidth) {
                 current.setLength(0)
                 current.append(candidate)
-            } else if (lines.size < MAX_LINES - 1) {
+            } else if (lines.size < maxLines - 1) {
                 lines.add(current.toString())
                 current.setLength(0)
                 current.append(word)
@@ -192,12 +282,12 @@ object NowPlayingCard {
                 break
             }
         }
-        if (current.isNotEmpty() && lines.size < MAX_LINES) lines.add(current.toString())
+        if (current.isNotEmpty() && lines.size < maxLines) lines.add(current.toString())
 
-        return lines.map { line ->
+        return lines.mapIndexed { index, line ->
+            val isLast = index == lines.lastIndex
+            if (!(truncated && isLast) && paint.measureText(line) <= maxWidth) return@mapIndexed line
             var shrunk = line
-            val needsEllipsis = truncated && line === lines.last() || paint.measureText(shrunk) > maxWidth
-            if (!needsEllipsis) return@map line
             while (shrunk.isNotEmpty() && paint.measureText("$shrunk…") > maxWidth) {
                 shrunk = shrunk.dropLast(1)
             }
@@ -205,10 +295,10 @@ object NowPlayingCard {
         }
     }
 
-    private fun measureHeight(paint: TextPaint, text: String, textSize: Float, maxWidth: Float): Float {
+    private fun measureHeight(paint: TextPaint, text: String, textSize: Float, maxWidth: Float, maxLines: Int): Float {
         if (text.isBlank()) return 0f
         paint.textSize = textSize
-        return wrapLines(paint, text, maxWidth).size * paint.fontSpacing
+        return wrapLines(paint, text, maxWidth, maxLines).size * paint.fontSpacing
     }
 
     private fun centerCrop(target: Rect, srcWidth: Int, srcHeight: Int): Rect {
